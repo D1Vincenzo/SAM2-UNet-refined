@@ -45,9 +45,16 @@ def main(args):
     device = torch.device("cuda")
     model = SAM2UNet(args.hiera_path)
     model.to(device)
-    optim = opt.AdamW([{"params":model.parameters(), "initia_lr": args.lr}], lr=args.lr, weight_decay=args.weight_decay)
+    # optim = opt.AdamW([{"params":model.parameters(), "initia_lr": args.lr}], lr=args.lr, weight_decay=args.weight_decay)
+    # 只训练 requires_grad=True 的参数（即 LoRA 层）
+    trainable_params = filter(lambda p: p.requires_grad, model.parameters())
+    optim = opt.AdamW(trainable_params, lr=args.lr, weight_decay=args.weight_decay)
     scheduler = CosineAnnealingLR(optim, args.epoch, eta_min=1.0e-7)
     os.makedirs(args.save_path, exist_ok=True)
+    print("✅ Trainable parameters (should be LoRA only):")
+    for name, param in model.named_parameters():
+        if param.requires_grad:
+            print(" -", name, param.shape)
     for epoch in range(args.epoch):
         for i, batch in enumerate(dataloader):
             x = batch['image']

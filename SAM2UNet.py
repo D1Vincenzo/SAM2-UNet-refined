@@ -48,23 +48,23 @@ class Up(nn.Module):
         return self.conv(x)
 
 
-class Adapter(nn.Module):
-    def __init__(self, blk) -> None:
-        super(Adapter, self).__init__()
-        self.block = blk
-        dim = blk.attn.qkv.in_features
-        self.prompt_learn = nn.Sequential(
-            nn.Linear(dim, 32),
-            nn.GELU(),
-            nn.Linear(32, dim),
-            nn.GELU()
-        )
+# class Adapter(nn.Module):
+#     def __init__(self, blk) -> None:
+#         super(Adapter, self).__init__()
+#         self.block = blk
+#         dim = blk.attn.qkv.in_features
+#         self.prompt_learn = nn.Sequential(
+#             nn.Linear(dim, 32),
+#             nn.GELU(),
+#             nn.Linear(32, dim),
+#             nn.GELU()
+#         )
 
-    def forward(self, x):
-        prompt = self.prompt_learn(x)
-        promped = x + prompt
-        net = self.block(promped)
-        return net
+#     def forward(self, x):
+#         prompt = self.prompt_learn(x)
+#         promped = x + prompt
+#         net = self.block(promped)
+#         return net
     
 
 class BasicConv2d(nn.Module):
@@ -120,6 +120,7 @@ class RFB_modified(nn.Module):
         x = self.relu(x_cat + self.conv_res(x))
         return x
 
+from peft import get_peft_model, LoraConfig, TaskType
 
 class SAM2UNet(nn.Module):
     def __init__(self, checkpoint_path=None) -> None:
@@ -138,17 +139,38 @@ class SAM2UNet(nn.Module):
         del model.obj_ptr_proj
         del model.image_encoder.neck
         self.encoder = model.image_encoder.trunk
+        
+        
+        
+        # 冻结主干参数
+        for param in self.encoder.parameters():
+            param.requires_grad = False
+
+        # LoRA 配置
+        lora_config = LoraConfig(
+            r=8,
+            lora_alpha=16,
+            lora_dropout=0.1,
+            target_modules=["qkv"],  # LoRA 会 patch 掉 Linear 层
+            bias="none",
+            task_type=None
+        )
+
+        # 将每个 block 的 attention 中的 qkv 层插入 LoRA
+        for block in self.encoder.blocks:
+            block.attn = get_peft_model(block.attn, lora_config)
+            
 
         for param in self.encoder.parameters():
             param.requires_grad = False
-        blocks = []
-        for block in self.encoder.blocks:
-            blocks.append(
-                Adapter(block)
-            )
-        self.encoder.blocks = nn.Sequential(
-            *blocks
-        )
+        # blocks = []
+        # for block in self.encoder.blocks:
+        #     blocks.append(
+        #         Adapter(block)
+        #     )
+        # self.encoder.blocks = nn.Sequential(
+        #     *blocks
+        # )
         self.rfb1 = RFB_modified(144, 64)
         self.rfb2 = RFB_modified(288, 64)
         self.rfb3 = RFB_modified(576, 64)
@@ -179,3 +201,4 @@ if __name__ == "__main__":
         x = torch.randn(1, 3, 352, 352).cuda()
         out, out1, out2 = model(x)
         print(out.shape, out1.shape, out2.shape)
+    print(model.encoder.blocks[10].attn.qkv.print_trainable_parameters())
