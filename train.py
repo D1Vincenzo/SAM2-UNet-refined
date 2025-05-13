@@ -78,15 +78,15 @@ def main(args):
             print('[Saving Snapshot:]', os.path.join(args.save_path, 'SAM2-UNet-%d.pth'% (epoch + 1)))
 
 
-# def seed_torch(seed=1024):
-# 	random.seed(seed)
-# 	os.environ['PYTHONHASHSEED'] = str(seed)
-# 	np.random.seed(seed)
-# 	torch.manual_seed(seed)
-# 	torch.cuda.manual_seed(seed)
-# 	torch.cuda.manual_seed_all(seed)
-# 	torch.backends.cudnn.benchmark = False
-# 	torch.backends.cudnn.deterministic = True
+def seed_torch(seed=1024):
+	random.seed(seed)
+	os.environ['PYTHONHASHSEED'] = str(seed)
+	np.random.seed(seed)
+	torch.manual_seed(seed)
+	torch.cuda.manual_seed(seed)
+	torch.cuda.manual_seed_all(seed)
+	torch.backends.cudnn.benchmark = False
+	torch.backends.cudnn.deterministic = True
 
 
 if __name__ == "__main__":
