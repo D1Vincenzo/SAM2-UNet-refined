@@ -90,5 +90,5 @@ def seed_torch(seed=1024):
 
 
 if __name__ == "__main__":
-    # seed_torch(1024)
+    seed_torch(1024)
     main(args)
