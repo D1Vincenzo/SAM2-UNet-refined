@@ -1,7 +1,8 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from sam2.build_sam import build_sam2
+# from sam2.build_sam import build_sam2
+from build_medsam2 import build_medsam2
 
 
 class DoubleConv(nn.Module):
@@ -125,11 +126,15 @@ from peft import get_peft_model, LoraConfig, TaskType
 class SAM2UNet(nn.Module):
     def __init__(self, checkpoint_path=None) -> None:
         super(SAM2UNet, self).__init__()    
-        model_cfg = "sam2_hiera_l.yaml"
+        # model_cfg = "sam2_hiera_l.yaml"
+        model_cfg = "sam2_configs/sam2.1_hiera_t512.yaml"
         if checkpoint_path:
-            model = build_sam2(model_cfg, checkpoint_path)
+            # model = build_sam2(model_cfg, checkpoint_path)
+            model = build_medsam2(model_cfg, checkpoint_path)
+
         else:
-            model = build_sam2(model_cfg)
+            # model = build_sam2(model_cfg)
+            model = build_medsam2(model_cfg)
         del model.sam_mask_decoder
         del model.sam_prompt_encoder
         del model.memory_encoder
@@ -171,10 +176,14 @@ class SAM2UNet(nn.Module):
         # self.encoder.blocks = nn.Sequential(
         #     *blocks
         # )
-        self.rfb1 = RFB_modified(144, 64)
-        self.rfb2 = RFB_modified(288, 64)
-        self.rfb3 = RFB_modified(576, 64)
-        self.rfb4 = RFB_modified(1152, 64)
+        # self.rfb1 = RFB_modified(144, 64)
+        # self.rfb2 = RFB_modified(288, 64)
+        # self.rfb3 = RFB_modified(576, 64)
+        # self.rfb4 = RFB_modified(1152, 64)
+        self.rfb1 = RFB_modified(96, 64)
+        self.rfb2 = RFB_modified(192, 64)
+        self.rfb3 = RFB_modified(384, 64)
+        self.rfb4 = RFB_modified(768, 64)
         self.up1 = (Up(128, 64))
         self.up2 = (Up(128, 64))
         self.up3 = (Up(128, 64))
