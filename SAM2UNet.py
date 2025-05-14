@@ -124,7 +124,7 @@ class RFB_modified(nn.Module):
 from peft import get_peft_model, LoraConfig, TaskType
 
 class SAM2UNet(nn.Module):
-    def __init__(self, checkpoint_path=None) -> None:
+    def __init__(self, checkpoint_path=None, num_classes=4) -> None:
         super(SAM2UNet, self).__init__()    
         # model_cfg = "sam2_hiera_l.yaml"
         model_cfg = "sam2_configs/sam2.1_hiera_t512.yaml"
@@ -188,9 +188,12 @@ class SAM2UNet(nn.Module):
         self.up2 = (Up(128, 64))
         self.up3 = (Up(128, 64))
         self.up4 = (Up(128, 64))
-        self.side1 = nn.Conv2d(64, 1, kernel_size=1)
-        self.side2 = nn.Conv2d(64, 1, kernel_size=1)
-        self.head = nn.Conv2d(64, 1, kernel_size=1)
+        # self.side1 = nn.Conv2d(64, 1, kernel_size=1)
+        # self.side2 = nn.Conv2d(64, 1, kernel_size=1)
+        # self.head = nn.Conv2d(64, 1, kernel_size=1)
+        self.side1 = nn.Conv2d(64, num_classes, kernel_size=1)
+        self.side2 = nn.Conv2d(64, num_classes, kernel_size=1)
+        self.head = nn.Conv2d(64, num_classes, kernel_size=1)
 
     def forward(self, x):
         x1, x2, x3, x4 = self.encoder(x)
@@ -210,4 +213,4 @@ if __name__ == "__main__":
         x = torch.randn(1, 3, 352, 352).cuda()
         out, out1, out2 = model(x)
         print(out.shape, out1.shape, out2.shape)
-    print(model.encoder.blocks[10].attn.qkv.print_trainable_parameters())
+    # print(model.encoder.blocks[10].attn.qkv.print_trainable_parameters())
