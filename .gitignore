@@ -1,3 +1,10 @@
 __pycache__
-processed_dataset
+processed_*
 sam2_hiera_large.pt
+comparison_results
+outputs
+SAM2-UNet-10.pth
+outputs_*
+runs
+SAM2-UNet-*
+MedSAM2_latest.pt
