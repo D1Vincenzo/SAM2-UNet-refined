@@ -9,41 +9,45 @@ from dataset import TestDataset
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--checkpoint", type=str, required=True,
-                help="path to the checkpoint of sam2-unet")
-parser.add_argument("--test_image_path", type=str, required=True, 
-                    help="path to the image files for testing")
-parser.add_argument("--test_gt_path", type=str, required=True,
-                    help="path to the mask files for testing")
-parser.add_argument("--save_path", type=str, required=True,
-                    help="path to save the predicted masks")
+parser.add_argument("--checkpoint", type=str, required=True)
+parser.add_argument("--test_image_path", type=str, required=True)
+parser.add_argument("--test_gt_path", type=str, required=True)
+parser.add_argument("--save_path", type=str, required=True)
+parser.add_argument("--target_labels", nargs="+", type=int, required=True,
+                    help="测试时指定参与训练的标签类别（与训练时一致）")
 args = parser.parse_args()
 
-
+# === 模型设置 ===
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-test_loader = TestDataset(args.test_image_path, args.test_gt_path, 352)
-model = SAM2UNet().to(device)
-model.load_state_dict(torch.load(args.checkpoint), strict=True)
+target_labels = sorted(set(args.target_labels))
+num_classes = len(target_labels)
+
+target_labels = sorted(set(args.target_labels))
+num_classes = len(target_labels)
+label_mapping = {raw: i for i, raw in enumerate(target_labels)}
+reverse_mapping = {v: k for k, v in label_mapping.items()}  # ✅ 用于反映射
+
+
+model = SAM2UNet(checkpoint_path=args.checkpoint, num_classes=num_classes).to(device)
+model.load_state_dict(torch.load(args.checkpoint, map_location=device))
 model.eval()
-model.cuda()
+
+# === 测试集加载 ===
+test_loader = TestDataset(args.test_image_path, args.test_gt_path, 352)
 os.makedirs(args.save_path, exist_ok=True)
+
+# === 推理 ===
 for i in range(test_loader.size):
     with torch.no_grad():
         image, gt, name = test_loader.load_data()
-        gt = np.asarray(gt, np.float32)
         image = image.to(device)
-        res, _, _ = model(image)
-        # fix: duplicate sigmoid
-        # res = torch.sigmoid(res)
-        res = F.upsample(res, size=gt.shape, mode='bilinear', align_corners=False)
-        res = res.sigmoid().data.cpu()
-        res = res.numpy().squeeze()
-        res = (res - res.min()) / (res.max() - res.min() + 1e-8)
-        res = (res * 255).astype(np.uint8)
-        # If you want to binarize the prediction results, please uncomment the following three lines. 
-        # Note that this action will affect the calculation of evaluation metrics.
-        # lambda = 0.5
-        # res[res >= int(255 * lambda)] = 255
-        # res[res < int(255 * lambda)] = 0
-        print("Saving " + name)
-        imageio.imsave(os.path.join(args.save_path, name[:-4] + ".png"), res)
+
+        output, _, _ = model(image)  # [1, C, H, W]
+        output = F.interpolate(output, size=gt.shape, mode='bilinear', align_corners=False)
+        pred = torch.argmax(output, dim=1).squeeze(0).cpu().numpy().astype(np.uint8)  # [H, W]
+        # pred: shape [H, W], 值为 0 ~ num_classes-1
+        pred_remapped = np.vectorize(reverse_mapping.get)(pred).astype(np.uint8)
+
+        print(f"✅ Saving prediction: {name}")
+        imageio.imwrite(os.path.join(args.save_path, name[:-4] + ".png"), pred_remapped)
+

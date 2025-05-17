@@ -64,9 +64,12 @@ pred_root = args.pred_path
 mask_root = args.gt_path
 mask_name_list = sorted(os.listdir(mask_root))
 for i, mask_name in enumerate(mask_name_list):
-    print(f"[{i}] Processing {mask_name}...")
+    # print(f"[{i}] Processing {mask_name}...")
     mask_path = os.path.join(mask_root, mask_name)
-    pred_path = os.path.join(pred_root, mask_name[:-4] + '.png')
+    # pred_path = os.path.join(pred_root, mask_name[:-4] + '.png')
+    id = mask_name.split('_')[-1]  # 例如 test_mask_00020.png -> 00020.png
+    pred_name = f"test_img_{id}"
+    pred_path = os.path.join(pred_root, pred_name)
     mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
     pred = cv2.imread(pred_path, cv2.IMREAD_GRAYSCALE)
 
