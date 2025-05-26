@@ -9,6 +9,7 @@ from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from dataset import FullDataset
 from SAM2UNet import SAM2UNet
+from torch.utils.tensorboard import SummaryWriter
 
 
 parser = argparse.ArgumentParser("SAM2-UNet")
@@ -48,7 +49,10 @@ def main(args):
     optim = opt.AdamW([{"params":model.parameters(), "initia_lr": args.lr}], lr=args.lr, weight_decay=args.weight_decay)
     scheduler = CosineAnnealingLR(optim, args.epoch, eta_min=1.0e-7)
     os.makedirs(args.save_path, exist_ok=True)
+    writer = SummaryWriter(log_dir=os.path.join(args.save_path, 'runs'))
     for epoch in range(args.epoch):
+        model.train()
+        total_loss = 0.0
         for i, batch in enumerate(dataloader):
             x = batch['image']
             target = batch['label']
@@ -62,14 +66,18 @@ def main(args):
             loss = loss0 + loss1 + loss2
             loss.backward()
             optim.step()
+            total_loss += loss.item()
             if i % 50 == 0:
                 print("epoch:{}-{}: loss:{}".format(epoch + 1, i + 1, loss.item()))
-                
+        
+        avg_loss = total_loss / len(dataloader)
+        writer.add_scalar('Loss/train', avg_loss, epoch)        
         scheduler.step()
         if (epoch+1) % 5 == 0 or (epoch+1) == args.epoch:
             torch.save(model.state_dict(), os.path.join(args.save_path, 'SAM2-UNet-%d.pth' % (epoch + 1)))
             print('[Saving Snapshot:]', os.path.join(args.save_path, 'SAM2-UNet-%d.pth'% (epoch + 1)))
 
+    writer.close()
 
 def seed_torch(seed=1024):
 	random.seed(seed)
