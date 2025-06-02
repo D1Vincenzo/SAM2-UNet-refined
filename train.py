@@ -99,7 +99,7 @@ def main(args):
             torch.save(model.state_dict(), os.path.join(args.save_path, 'moe-UNet-%d.pth' % (epoch + 1)))
             print('[Saving Snapshot:]', os.path.join(args.save_path, 'moe-UNet-%d.pth'% (epoch + 1)))
 
-        print_gate_weights(model)
+        # print_gate_weights(model)
     
     writer.close()
 
