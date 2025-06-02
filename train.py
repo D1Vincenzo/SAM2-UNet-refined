@@ -50,17 +50,28 @@ def main(args):
     model = SAM2UNet(args.hiera_path)
     model.to(device)
     
+    start_epoch = 0
     if args.resume is not None and os.path.isfile(args.resume):
         print(f"=> Loading model weights from {args.resume}")
         model.load_state_dict(torch.load(args.resume, map_location=device))
+
+        # 尝试从文件名中提取 epoch 号，如 SAM2-UNet-10.pth → 10
+        import re
+        match = re.search(r'(\d+)', os.path.basename(args.resume))
+        if match:
+            start_epoch = int(match.group(1))
+            print(f"=> Resuming training from epoch {start_epoch}")
+        else:
+            print("=> Warning: Could not extract epoch index from resume filename. Training will restart from epoch 0.")
     else:
         print("=> No checkpoint loaded. Training from scratch.")
+
 
     optim = opt.AdamW([{"params":model.parameters(), "initia_lr": args.lr}], lr=args.lr, weight_decay=args.weight_decay)
     scheduler = CosineAnnealingLR(optim, args.epoch, eta_min=1.0e-7)
     os.makedirs(args.save_path, exist_ok=True)
     writer = SummaryWriter(log_dir=os.path.join(args.save_path, 'runs'))
-    for epoch in range(args.epoch):
+    for epoch in range(start_epoch, args.epoch):
         model.train()
         total_loss = 0.0
         for i, batch in enumerate(dataloader):
@@ -85,8 +96,8 @@ def main(args):
         scheduler.step()
         # if (epoch+1) % 5 == 0 or (epoch+1) == args.epoch:
         if (epoch + 1) % 50 == 0 or (epoch + 1) == args.epoch:
-            torch.save(model.state_dict(), os.path.join(args.save_path, 'SAM2-UNet-%d.pth' % (epoch + 1)))
-            print('[Saving Snapshot:]', os.path.join(args.save_path, 'SAM2-UNet-%d.pth'% (epoch + 1)))
+            torch.save(model.state_dict(), os.path.join(args.save_path, 'moe-UNet-%d.pth' % (epoch + 1)))
+            print('[Saving Snapshot:]', os.path.join(args.save_path, 'moe-UNet-%d.pth'% (epoch + 1)))
 
         print_gate_weights(model)
     
