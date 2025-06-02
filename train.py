@@ -26,6 +26,9 @@ parser.add_argument("--epoch", type=int, default=20,
 parser.add_argument("--lr", type=float, default=0.001, help="learning rate")
 parser.add_argument("--batch_size", default=12, type=int)
 parser.add_argument("--weight_decay", default=5e-4, type=float)
+parser.add_argument('--resume', type=str, default=None,
+                    help="path to the model checkpoint (.pth) to resume from")
+
 args = parser.parse_args()
 
 
@@ -46,6 +49,13 @@ def main(args):
     device = torch.device("cuda")
     model = SAM2UNet(args.hiera_path)
     model.to(device)
+    
+    if args.resume is not None and os.path.isfile(args.resume):
+        print(f"=> Loading model weights from {args.resume}")
+        model.load_state_dict(torch.load(args.resume, map_location=device))
+    else:
+        print("=> No checkpoint loaded. Training from scratch.")
+
     optim = opt.AdamW([{"params":model.parameters(), "initia_lr": args.lr}], lr=args.lr, weight_decay=args.weight_decay)
     scheduler = CosineAnnealingLR(optim, args.epoch, eta_min=1.0e-7)
     os.makedirs(args.save_path, exist_ok=True)
@@ -73,10 +83,13 @@ def main(args):
         avg_loss = total_loss / len(dataloader)
         writer.add_scalar('Loss/train', avg_loss, epoch)        
         scheduler.step()
-        if (epoch+1) % 5 == 0 or (epoch+1) == args.epoch:
+        # if (epoch+1) % 5 == 0 or (epoch+1) == args.epoch:
+        if (epoch + 1) % 50 == 0 or (epoch + 1) == args.epoch:
             torch.save(model.state_dict(), os.path.join(args.save_path, 'SAM2-UNet-%d.pth' % (epoch + 1)))
             print('[Saving Snapshot:]', os.path.join(args.save_path, 'SAM2-UNet-%d.pth'% (epoch + 1)))
 
+        print_gate_weights(model)
+    
     writer.close()
 
 def seed_torch(seed=1024):
@@ -88,6 +101,14 @@ def seed_torch(seed=1024):
 	torch.cuda.manual_seed_all(seed)
 	torch.backends.cudnn.benchmark = False
 	torch.backends.cudnn.deterministic = True
+ 
+def print_gate_weights(model):
+    print("==== Gating Network Weights ====")
+    for name, param in model.named_parameters():
+        if "moe.gate" in name:
+            print(f"{name:60} {tuple(param.shape)}")
+    print("================================")
+
 
 
 if __name__ == "__main__":
