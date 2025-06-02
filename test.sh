@@ -1,6 +1,6 @@
 CUDA_VISIBLE_DEVICES="0" \
 python test.py \
---checkpoint "<set your checkpoint path here>" \
---test_image_path "<set your testing image dir here>" \
---test_gt_path "<set your testing mask dir here>" \
---save_path "<set your prediction results dir here>"
+--checkpoint "SAM2UNet-Polyp.pth" \
+--test_image_path "Kvasir-SEG/images/" \
+--test_gt_path "Kvasir-SEG/masks/" \
+--save_path "output_kvasir" \

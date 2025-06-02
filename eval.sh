@@ -1,4 +1,4 @@
 python eval.py \
---dataset_name "<set your dataset name here>" \
---pred_path "<set your prediction result path here>" \
---gt_path "<set your ground truth path here>"
+--dataset_name "kvasir" \
+--pred_path "output_kvasir/" \
+--gt_path "Kvasir-SEG/masks/"

@@ -67,7 +67,7 @@ class Normalize(object):
 class FullDataset(Dataset):
     def __init__(self, image_root, gt_root, size, mode):
         self.images = [image_root + f for f in os.listdir(image_root) if f.endswith('.jpg') or f.endswith('.png')]
-        self.gts = [gt_root + f for f in os.listdir(gt_root) if f.endswith('.png')]
+        self.gts = [gt_root + f for f in os.listdir(gt_root) if f.endswith('.png') or f.endswith('.jpg')]
         self.images = sorted(self.images)
         self.gts = sorted(self.gts)
         if mode == 'train':
@@ -84,6 +84,12 @@ class FullDataset(Dataset):
                 ToTensor(),
                 Normalize()
             ])
+        # print(f"Found {len(self.images)} images, {len(self.gts)} masks")
+        # print("Example image path:", self.images[0] if self.images else "None")
+        # print("Example gt path:", self.gts[0] if self.gts else "None")
+
+        assert len(self.images) == len(self.gts), f"Number of images ({len(self.images)}) and ground truths ({len(self.gts)}) do not match!"
+
 
     def __getitem__(self, idx):
         image = self.rgb_loader(self.images[idx])
@@ -109,7 +115,7 @@ class FullDataset(Dataset):
 class TestDataset:
     def __init__(self, image_root, gt_root, size):
         self.images = [image_root + f for f in os.listdir(image_root) if f.endswith('.jpg') or f.endswith('.png')]
-        self.gts = [gt_root + f for f in os.listdir(gt_root) if f.endswith('.png')]
+        self.gts = [gt_root + f for f in os.listdir(gt_root) if f.endswith('.png') or f.endswith('.jpg')]
         self.images = sorted(self.images)
         self.gts = sorted(self.gts)
         self.transform = transforms.Compose([

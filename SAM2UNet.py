@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from sam2.build_sam import build_sam2
+from moe_lora import replace_qkv_with_moe_qkv
 
 
 class DoubleConv(nn.Module):
@@ -141,6 +142,7 @@ class SAM2UNet(nn.Module):
 
         for param in self.encoder.parameters():
             param.requires_grad = False
+        
         blocks = []
         for block in self.encoder.blocks:
             blocks.append(
@@ -149,6 +151,9 @@ class SAM2UNet(nn.Module):
         self.encoder.blocks = nn.Sequential(
             *blocks
         )
+        
+        # replace_qkv_with_moe_qkv(self.encoder, r=4, n_experts=4)
+
         self.rfb1 = RFB_modified(144, 64)
         self.rfb2 = RFB_modified(288, 64)
         self.rfb3 = RFB_modified(576, 64)
@@ -162,6 +167,27 @@ class SAM2UNet(nn.Module):
         self.head = nn.Conv2d(64, 1, kernel_size=1)
 
     def forward(self, x):
+        # # ===== 添加调试代码：检查 attention.qkv 的结构和输入输出 shape =====
+        # with torch.no_grad():
+        #     print("==== SHAPE CHECK START ====")
+        #     first_block = self.encoder.blocks[0]
+
+        #     # 如果 block 是 Adapter 封装的，需要访问其内部
+        #     if hasattr(first_block, "block"):
+        #         attn = first_block.block.attn
+        #     else:
+        #         attn = first_block.attn
+
+        #     print("Attention module type:", type(attn))
+        #     print("attn.qkv type:", type(attn.qkv))
+        #     print("attn.qkv.weight shape:", attn.qkv.weight.shape)
+
+        #     dummy_input = torch.randn(1, 196, attn.qkv.in_features).cuda()  # 假设 patch 数量为 196
+        #     qkv_out = attn.qkv(dummy_input)
+        #     print("qkv output shape:", qkv_out.shape)
+        #     print("==== SHAPE CHECK END ====")
+        # # ============================================================
+
         x1, x2, x3, x4 = self.encoder(x)
         x1, x2, x3, x4 = self.rfb1(x1), self.rfb2(x2), self.rfb3(x3), self.rfb4(x4)
         x = self.up1(x4, x3)
