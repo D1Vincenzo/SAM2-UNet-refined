@@ -13,8 +13,10 @@ class ToTensor(object):
 
     def __call__(self, data):
         image, label = data['image'], data['label']
-        return {'image': F.to_tensor(image), 'label': F.to_tensor(label)}
-
+        image = F.to_tensor(image)
+        label = F.to_tensor(label)
+        label = (label > 0.5).float()  # 明确二值化成 0 或 1
+        return {'image': image, 'label': label}
 
 class Resize(object):
 
@@ -24,7 +26,7 @@ class Resize(object):
     def __call__(self, data):
         image, label = data['image'], data['label']
 
-        return {'image': F.resize(image, self.size), 'label': F.resize(label, self.size, interpolation=InterpolationMode.BICUBIC)}
+        return {'image': F.resize(image, self.size), 'label': F.resize(label, self.size, interpolation=InterpolationMode.NEAREST)}
 
 
 class RandomHorizontalFlip(object):
@@ -65,11 +67,11 @@ class Normalize(object):
     
 
 class FullDataset(Dataset):
-    def __init__(self, image_root, gt_root, size, mode):
-        self.images = [image_root + f for f in os.listdir(image_root) if f.endswith('.jpg') or f.endswith('.png')]
-        self.gts = [gt_root + f for f in os.listdir(gt_root) if f.endswith('.png') or f.endswith('.jpg')]
-        self.images = sorted(self.images)
-        self.gts = sorted(self.gts)
+    def __init__(self, image_root, gt_root, size, mode='train'):
+        self.images = sorted([os.path.join(image_root, f) for f in os.listdir(image_root) if f.endswith(('.jpg', '.png'))])
+        self.gts = sorted([os.path.join(gt_root, f) for f in os.listdir(gt_root) if f.endswith(('.jpg', '.png'))])
+        assert len(self.images) == len(self.gts), f"Number of images ({len(self.images)}) and labels ({len(self.gts)}) do not match!"
+
         if mode == 'train':
             self.transform = transforms.Compose([
                 Resize((size, size)),
@@ -78,18 +80,12 @@ class FullDataset(Dataset):
                 ToTensor(),
                 Normalize()
             ])
-        else:
+        else:  # 'val' or other modes
             self.transform = transforms.Compose([
                 Resize((size, size)),
                 ToTensor(),
                 Normalize()
             ])
-        # print(f"Found {len(self.images)} images, {len(self.gts)} masks")
-        # print("Example image path:", self.images[0] if self.images else "None")
-        # print("Example gt path:", self.gts[0] if self.gts else "None")
-
-        assert len(self.images) == len(self.gts), f"Number of images ({len(self.images)}) and ground truths ({len(self.gts)}) do not match!"
-
 
     def __getitem__(self, idx):
         image = self.rgb_loader(self.images[idx])
@@ -114,10 +110,10 @@ class FullDataset(Dataset):
 
 class TestDataset:
     def __init__(self, image_root, gt_root, size):
-        self.images = [image_root + f for f in os.listdir(image_root) if f.endswith('.jpg') or f.endswith('.png')]
-        self.gts = [gt_root + f for f in os.listdir(gt_root) if f.endswith('.png') or f.endswith('.jpg')]
-        self.images = sorted(self.images)
-        self.gts = sorted(self.gts)
+        self.images = sorted([os.path.join(image_root, f) for f in os.listdir(image_root) if f.endswith(('.jpg', '.png'))])
+        self.gts = sorted([os.path.join(gt_root, f) for f in os.listdir(gt_root) if f.endswith(('.jpg', '.png'))])
+        assert len(self.images) == len(self.gts)
+
         self.transform = transforms.Compose([
             transforms.Resize((size, size)),
             transforms.ToTensor(),
@@ -134,9 +130,7 @@ class TestDataset:
 
         gt = self.binary_loader(self.gts[self.index])
         gt = np.array(gt)
-
-        name = self.images[self.index].split('/')[-1]
-
+        name = os.path.basename(self.images[self.index])
         self.index += 1
         return image, gt, name
 
