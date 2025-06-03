@@ -142,17 +142,19 @@ class SAM2UNet(nn.Module):
 
         for param in self.encoder.parameters():
             param.requires_grad = False
+            
+        ''' ADAPTER '''
+        # blocks = []
+        # for block in self.encoder.blocks:
+        #     blocks.append(
+        #         Adapter(block)
+        #     )
+        # self.encoder.blocks = nn.Sequential(
+        #     *blocks
+        # )
         
-        blocks = []
-        for block in self.encoder.blocks:
-            blocks.append(
-                Adapter(block)
-            )
-        self.encoder.blocks = nn.Sequential(
-            *blocks
-        )
-        
-        # replace_qkv_with_moe_qkv(self.encoder, r=4, n_experts=4)
+        ''' MOE '''
+        replace_qkv_with_moe_qkv(self.encoder, r=4, n_experts=4)
 
         self.rfb1 = RFB_modified(144, 64)
         self.rfb2 = RFB_modified(288, 64)
