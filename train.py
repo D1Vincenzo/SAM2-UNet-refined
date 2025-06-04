@@ -5,6 +5,7 @@ import numpy as np
 import torch
 import torch.optim as opt
 import torch.nn.functional as F
+import py_sod_metrics
 from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from dataset import FullDataset
@@ -28,6 +29,8 @@ parser.add_argument("--batch_size", default=12, type=int)
 parser.add_argument("--weight_decay", default=5e-4, type=float)
 parser.add_argument('--resume', type=str, default=None,
                     help="path to the model checkpoint (.pth) to resume from")
+parser.add_argument('--name', type=str, default='moe',
+                    help="name of the model, used for logging and saving")
 
 args = parser.parse_args()
 
@@ -42,43 +45,91 @@ def structure_loss(pred, mask):
     wiou = 1 - (inter + 1)/(union - inter+1)
     return (wbce + wiou).mean()
 
+def evaluate_dice_with_metric(model, dataloader, device):
+    from py_sod_metrics import FmeasureV2, DICEHandler
+
+    sample_gray = dict(with_adaptive=True, with_dynamic=True)
+    FMv2 = FmeasureV2(
+        metric_handlers={
+            "dice": DICEHandler(**sample_gray),
+        }
+    )
+
+    model.eval()
+    with torch.no_grad():
+        for batch in dataloader:
+            images = batch['image'].to(device)
+            gts = batch['label'].to(device)
+
+            preds = model(images)[0]
+            preds = torch.sigmoid(preds).cpu().numpy()
+            gts = gts.cpu().numpy()
+
+            for pred, gt in zip(preds, gts):
+                pred = (pred[0] * 255).astype(np.uint8)  # H×W, uint8
+                gt = (gt[0] * 255).astype(np.uint8)
+                FMv2.step(pred=pred, gt=gt)
+
+    results = FMv2.get_results()
+    return results["dice"]["dynamic"].mean()
+
+
 
 def main(args):    
-    dataset = FullDataset(args.train_image_path, args.train_mask_path, 352, mode='train')
-    dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, num_workers=8)
+    # 加载训练集
+    train_dataset = FullDataset(args.train_image_path, args.train_mask_path, 352, mode='train')
+    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=8)
+    
+    # 加载验证集（目录命名为 val）
+    val_dataset = FullDataset(args.train_image_path.replace("train", "val"), 
+                              args.train_mask_path.replace("train", "val"),
+                              352, mode='val')
+    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=4)
+
     device = torch.device("cuda")
     model = SAM2UNet(args.hiera_path)
     model.to(device)
     
-    start_epoch = 0
-    if args.resume is not None and os.path.isfile(args.resume):
-        print(f"=> Loading model weights from {args.resume}")
-        model.load_state_dict(torch.load(args.resume, map_location=device))
+    optim = opt.AdamW([{"params": model.parameters(), "initia_lr": args.lr}], lr=args.lr, weight_decay=args.weight_decay)
+    scheduler = CosineAnnealingLR(optim, args.epoch, eta_min=1.0e-7)
 
-        # 尝试从文件名中提取 epoch 号，如 SAM2-UNet-10.pth → 10
-        import re
-        match = re.search(r'(\d+)', os.path.basename(args.resume))
-        if match:
-            start_epoch = int(match.group(1))
+    start_epoch = 0
+    best_val_loss = float('inf')  # 用于记录最优模型
+    best_val_dice = 0.0  # 新增：用于保存最佳 DICE
+
+    if args.resume is not None and os.path.isfile(args.resume):
+        print(f"=> Loading checkpoint from {args.resume}")
+        checkpoint = torch.load(args.resume, map_location=device)
+        
+        if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+            # 是 checkpoint dict
+            model.load_state_dict(checkpoint['model_state_dict'])
+            optim_state_dict = checkpoint.get('optimizer_state_dict', None)
+            sched_state_dict = checkpoint.get('scheduler_state_dict', None)
+            if optim_state_dict:
+                optim.load_state_dict(optim_state_dict)
+            if sched_state_dict:
+                scheduler.load_state_dict(sched_state_dict)
+            start_epoch = checkpoint.get('epoch', 0)
+            best_val_loss = checkpoint.get('best_val_loss', float('inf'))
             print(f"=> Resuming training from epoch {start_epoch}")
         else:
-            print("=> Warning: Could not extract epoch index from resume filename. Training will restart from epoch 0.")
+            # 兼容旧模型：只有 model weights
+            model.load_state_dict(checkpoint)
+            print("=> Loaded model weights only. Training will restart from epoch 0.")
     else:
         print("=> No checkpoint loaded. Training from scratch.")
 
-
-    optim = opt.AdamW([{"params":model.parameters(), "initia_lr": args.lr}], lr=args.lr, weight_decay=args.weight_decay)
-    scheduler = CosineAnnealingLR(optim, args.epoch, eta_min=1.0e-7)
     os.makedirs(args.save_path, exist_ok=True)
     writer = SummaryWriter(log_dir=os.path.join(args.save_path, 'runs'))
+
     for epoch in range(start_epoch, args.epoch):
         model.train()
         total_loss = 0.0
-        for i, batch in enumerate(dataloader):
-            x = batch['image']
-            target = batch['label']
-            x = x.to(device)
-            target = target.to(device)
+        for i, batch in enumerate(train_loader):
+            x = batch['image'].to(device)
+            target = batch['label'].to(device)
+
             optim.zero_grad()
             pred0, pred1, pred2 = model(x)
             loss0 = structure_loss(pred0, target)
@@ -88,19 +139,57 @@ def main(args):
             loss.backward()
             optim.step()
             total_loss += loss.item()
+
             if i % 50 == 0:
                 print("epoch:{}-{}: loss:{}".format(epoch + 1, i + 1, loss.item()))
-        
-        avg_loss = total_loss / len(dataloader)
-        writer.add_scalar('Loss/train', avg_loss, epoch)        
-        scheduler.step()
-        # if (epoch+1) % 5 == 0 or (epoch+1) == args.epoch:
-        if (epoch + 1) % 50 == 0 or (epoch + 1) == args.epoch:
-            torch.save(model.state_dict(), os.path.join(args.save_path, 'moe-UNet-%d.pth' % (epoch + 1)))
-            print('[Saving Snapshot:]', os.path.join(args.save_path, 'moe-UNet-%d.pth'% (epoch + 1)))
 
-        # print_gate_weights(model)
-    
+        avg_loss = total_loss / len(train_loader)
+        writer.add_scalar('Loss/train', avg_loss, epoch)
+
+        # 验证阶段（不涉及梯度）
+        model.eval()
+
+        val_loss = 0.0
+        with torch.no_grad():
+            for batch in val_loader:
+                x = batch['image'].to(device)
+                target = batch['label'].to(device)
+                pred0, pred1, pred2 = model(x)
+                loss = structure_loss(pred0, target) + structure_loss(pred1, target) + structure_loss(pred2, target)
+                val_loss += loss.item()
+        avg_val_loss = val_loss / len(val_loader)
+        writer.add_scalar('Loss/val', avg_val_loss, epoch)
+        # DICE 评估
+        dice_score = evaluate_dice_with_metric(model, val_loader, device)
+        writer.add_scalar('Metric/DICE', dice_score, epoch)
+        print(f"[Epoch {epoch+1}] Train Loss: {avg_loss:.4f} | Val Loss: {avg_val_loss:.4f} | DICE Score: {dice_score:.4f}")
+
+        checkpoint_dict = {
+            'epoch': epoch + 1,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optim.state_dict(),
+            'scheduler_state_dict': scheduler.state_dict(),
+            'best_val_loss': best_val_loss,
+            'best_val_dice': best_val_dice,
+        }
+        
+        current_lr = scheduler.get_last_lr()[0]
+        writer.add_scalar('LR', current_lr, epoch)
+
+        # 保存最佳模型
+        if dice_score > best_val_dice:
+            best_val_dice = dice_score
+            best_model_path = os.path.join(args.save_path, f'{args.name}-best-model.pth')
+            torch.save(checkpoint_dict, best_model_path)
+            print(f"=> Best model (DICE ↑) saved to {best_model_path}")
+            
+        # 保存当前模型
+        latest_model_path = os.path.join(args.save_path, f'{args.name}-latest-model.pth')
+        torch.save(checkpoint_dict, latest_model_path)
+        print(f"[Saving latest model:] {latest_model_path}")
+
+        scheduler.step()
+
     writer.close()
 
 def seed_torch(seed=1024):
@@ -113,12 +202,6 @@ def seed_torch(seed=1024):
 	torch.backends.cudnn.benchmark = False
 	torch.backends.cudnn.deterministic = True
  
-def print_gate_weights(model):
-    print("==== Gating Network Weights ====")
-    for name, param in model.named_parameters():
-        if "moe.gate" in name:
-            print(f"{name:60} {tuple(param.shape)}")
-    print("================================")
 
 
 
