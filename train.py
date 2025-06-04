@@ -11,15 +11,16 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 from dataset import FullDataset
 from SAM2UNet import SAM2UNet
 from torch.utils.tensorboard import SummaryWriter
+from torch.utils.data import ConcatDataset
 
 
 parser = argparse.ArgumentParser("SAM2-UNet")
 parser.add_argument("--hiera_path", type=str, required=True, 
                     help="path to the sam2 pretrained hiera")
-parser.add_argument("--train_image_path", type=str, required=True, 
-                    help="path to the image that used to train the model")
-parser.add_argument("--train_mask_path", type=str, required=True,
-                    help="path to the mask file for training")
+# parser.add_argument("--train_image_path", type=str, required=True, 
+#                     help="path to the image that used to train the model")
+# parser.add_argument("--train_mask_path", type=str, required=True,
+#                     help="path to the mask file for training")
 parser.add_argument('--save_path', type=str, required=True,
                     help="path to store the checkpoint")
 parser.add_argument("--epoch", type=int, default=20, 
@@ -31,6 +32,8 @@ parser.add_argument('--resume', type=str, default=None,
                     help="path to the model checkpoint (.pth) to resume from")
 parser.add_argument('--name', type=str, default='moe',
                     help="name of the model, used for logging and saving")
+parser.add_argument('--train_roots', nargs='+', required=True,
+                    help="List of dataset train roots, e.g., datasets/ClinicDB/train datasets/CVC-ColonDB/train")
 
 args = parser.parse_args()
 
@@ -74,16 +77,29 @@ def evaluate_dice_with_metric(model, dataloader, device):
     return results["dice"]["dynamic"].mean()
 
 
+def build_combined_dataset(train_roots, size=352):
+    datasets = []
+    for train_root in train_roots:
+        image_path = os.path.join(train_root, "images")
+        mask_path = os.path.join(train_root, "masks")
+        datasets.append(FullDataset(image_path, mask_path, size, mode='train'))
+    return ConcatDataset(datasets)
 
 def main(args):    
     # 加载训练集
-    train_dataset = FullDataset(args.train_image_path, args.train_mask_path, 352, mode='train')
+    # train_dataset = FullDataset(args.train_image_path, args.train_mask_path, 352, mode='train')
+    # train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=8)
+    train_dataset = build_combined_dataset(args.train_roots, size=352)
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=8)
+
+
     
     # 加载验证集（目录命名为 val）
-    val_dataset = FullDataset(args.train_image_path.replace("train", "val"), 
-                              args.train_mask_path.replace("train", "val"),
-                              352, mode='val')
+    # val_dataset = FullDataset(args.train_image_path.replace("train", "val"), 
+    #                           args.train_mask_path.replace("train", "val"),
+    #                           352, mode='val')
+    # val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=4)
+    val_dataset = build_combined_dataset([root.replace("train", "val") for root in args.train_roots], size=352)
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=4)
 
     device = torch.device("cuda")
@@ -112,6 +128,7 @@ def main(args):
                 scheduler.load_state_dict(sched_state_dict)
             start_epoch = checkpoint.get('epoch', 0)
             best_val_loss = checkpoint.get('best_val_loss', float('inf'))
+            best_val_dice = checkpoint.get('best_val_dice', 0.0)
             print(f"=> Resuming training from epoch {start_epoch}")
         else:
             # 兼容旧模型：只有 model weights
