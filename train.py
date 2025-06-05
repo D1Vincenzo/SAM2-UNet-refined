@@ -12,6 +12,8 @@ from dataset import FullDataset
 from SAM2UNet import SAM2UNet
 from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import ConcatDataset
+import imageio
+import torchvision.utils as vutils
 
 
 parser = argparse.ArgumentParser("SAM2-UNet")
@@ -112,6 +114,9 @@ def main(args):
     start_epoch = 0
     best_val_loss = float('inf')  # 用于记录最优模型
     best_val_dice = 0.0  # 新增：用于保存最佳 DICE
+    vis_save_path = os.path.join(args.save_path, "val_visuals")
+    os.makedirs(vis_save_path, exist_ok=True)
+
 
     if args.resume is not None and os.path.isfile(args.resume):
         print(f"=> Loading checkpoint from {args.resume}")
@@ -174,6 +179,23 @@ def main(args):
                 pred0, pred1, pred2 = model(x)
                 loss = structure_loss(pred0, target) + structure_loss(pred1, target) + structure_loss(pred2, target)
                 val_loss += loss.item()
+                
+                # 保存预测图、GT、输入图像（最多前10张）
+                if num_saved < 10:
+                    pred = torch.sigmoid(pred0)
+                    pred_bin = (pred > 0.5).float()
+                    vis_pred = pred_bin[0][0].cpu().numpy() * 255
+                    vis_gt = target[0][0].cpu().numpy() * 255
+                    vis_input = x[0].cpu()
+                    vis_input = F.normalize(vis_input, mean=[-m/s for m, s in zip([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])], std=[1/s for s in [0.229, 0.224, 0.225]])
+                    vis_input = vis_input.clamp(0, 1)
+
+                    vutils.save_image(vis_input, os.path.join(vis_save_path, f"epoch{epoch+1}_input{num_saved+1}.png"))
+                    imageio.imwrite(os.path.join(vis_save_path, f"epoch{epoch+1}_pred{num_saved+1}.png"), vis_pred.astype(np.uint8))
+                    imageio.imwrite(os.path.join(vis_save_path, f"epoch{epoch+1}_gt{num_saved+1}.png"), vis_gt.astype(np.uint8))
+                    num_saved += 1
+            
+            
         avg_val_loss = val_loss / len(val_loader)
         writer.add_scalar('Loss/val', avg_val_loss, epoch)
         # DICE 评估
