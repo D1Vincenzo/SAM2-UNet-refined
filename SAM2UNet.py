@@ -161,7 +161,7 @@ class SAM2UNet(nn.Module):
         blocks = []
         for blk in self.encoder.blocks:
             blocks.append(
-                MoEAdapterBlock(blk, n_experts=4, lambda_=0.01)
+                MoEAdapterBlock(blk, n_experts=n_experts, lambda_=0.01)
             )
         self.encoder.blocks = nn.Sequential(*blocks)
 
