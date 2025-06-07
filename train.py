@@ -36,6 +36,7 @@ parser.add_argument('--name', type=str, default='moe',
                     help="name of the model, used for logging and saving")
 parser.add_argument('--train_roots', nargs='+', required=True,
                     help="List of dataset train roots, e.g., datasets/ClinicDB/train datasets/CVC-ColonDB/train")
+parser.add_argument('--n_experts', type=int, default=4)
 
 args = parser.parse_args()
 
@@ -109,7 +110,7 @@ def main(args):
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=4)
 
     device = torch.device("cuda")
-    model = SAM2UNet(args.hiera_path)
+    model = SAM2UNet(args.hiera_path, n_experts=args.n_experts)
     model.to(device)
     
     optim = opt.AdamW([{"params": model.parameters(), "initia_lr": args.lr}], lr=args.lr, weight_decay=args.weight_decay)

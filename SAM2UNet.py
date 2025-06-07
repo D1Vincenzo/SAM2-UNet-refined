@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from sam2.build_sam import build_sam2
 from moe_lora import replace_qkv_with_moe_qkv
+from moe_adapter import MoEAdapterBlock
 
 
 class DoubleConv(nn.Module):
@@ -123,7 +124,7 @@ class RFB_modified(nn.Module):
 
 
 class SAM2UNet(nn.Module):
-    def __init__(self, checkpoint_path=None) -> None:
+    def __init__(self, checkpoint_path=None, n_experts=4) -> None:
         super(SAM2UNet, self).__init__()    
         model_cfg = "sam2_hiera_l.yaml"
         if checkpoint_path:
@@ -153,8 +154,16 @@ class SAM2UNet(nn.Module):
         #     *blocks
         # )
         
-        ''' MOE '''
-        replace_qkv_with_moe_qkv(self.encoder, r=4, n_experts=4)
+        ''' MOE LORA'''
+        # replace_qkv_with_moe_qkv(self.encoder, r=4, n_experts=n_experts)
+        
+        ''' MOE ADAPTER '''
+        blocks = []
+        for blk in self.encoder.blocks:
+            blocks.append(
+                MoEAdapterBlock(blk, n_experts=4, lambda_=0.01)
+            )
+        self.encoder.blocks = nn.Sequential(*blocks)
 
         self.rfb1 = RFB_modified(144, 64)
         self.rfb2 = RFB_modified(288, 64)
