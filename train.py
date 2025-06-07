@@ -5,15 +5,15 @@ import numpy as np
 import torch
 import torch.optim as opt
 import torch.nn.functional as F
-import py_sod_metrics
+import imageio
+import torchvision.transforms.functional as TF
 from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from dataset import FullDataset
 from SAM2UNet import SAM2UNet
 from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import ConcatDataset
-import imageio
-import torchvision.utils as vutils
+from py_sod_metrics import FmeasureV2, DICEHandler
 
 
 parser = argparse.ArgumentParser("SAM2-UNet")
@@ -51,8 +51,6 @@ def structure_loss(pred, mask):
     return (wbce + wiou).mean()
 
 def evaluate_dice_with_metric(model, dataloader, device):
-    from py_sod_metrics import FmeasureV2, DICEHandler
-
     sample_gray = dict(with_adaptive=True, with_dynamic=True)
     FMv2 = FmeasureV2(
         metric_handlers={
@@ -86,6 +84,12 @@ def build_combined_dataset(train_roots, size=352):
         mask_path = os.path.join(train_root, "masks")
         datasets.append(FullDataset(image_path, mask_path, size, mode='train'))
     return ConcatDataset(datasets)
+
+def denormalize(tensor, mean, std):
+    inv_mean = [-m / s for m, s in zip(mean, std)]
+    inv_std = [1 / s for s in std]
+    return TF.normalize(tensor, inv_mean, inv_std).clamp(0, 1)
+
 
 def main(args):    
     # 加载训练集
@@ -148,6 +152,7 @@ def main(args):
     for epoch in range(start_epoch, args.epoch):
         model.train()
         total_loss = 0.0
+        total_loss_aux = 0.0
         for i, batch in enumerate(train_loader):
             x = batch['image'].to(device)
             target = batch['label'].to(device)
@@ -159,12 +164,14 @@ def main(args):
             loss2 = structure_loss(pred2, target)
             loss = loss0 + loss1 + loss2
             
+            ### 计算辅助损失
             aux_loss_total = 0.0
             for m in model.modules():
                 if hasattr(m, 'aux_loss'):
                     aux_loss_total += m.aux_loss
             loss += aux_loss_total
-                    
+            total_loss_aux += aux_loss_total.item()
+            ###
             loss.backward()
             optim.step()
             total_loss += loss.item()
@@ -194,15 +201,14 @@ def main(args):
                 if num_saved < 10:
                     pred = torch.sigmoid(pred0)
                     pred_bin = (pred > 0.5).float()
+
+                    # 取 batch 中的第 1 张图（0索引）
                     vis_pred = pred_bin[0][0].cpu().numpy() * 255
                     vis_gt = target[0][0].cpu().numpy() * 255
-                    vis_input = x[0].cpu()
-                    vis_input = F.normalize(vis_input, mean=[-m/s for m, s in zip([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])], std=[1/s for s in [0.229, 0.224, 0.225]])
-                    vis_input = vis_input.clamp(0, 1)
 
-                    vutils.save_image(vis_input, os.path.join(vis_save_path, f"epoch{epoch+1}_input{num_saved+1}.png"))
                     imageio.imwrite(os.path.join(vis_save_path, f"epoch{epoch+1}_pred{num_saved+1}.png"), vis_pred.astype(np.uint8))
                     imageio.imwrite(os.path.join(vis_save_path, f"epoch{epoch+1}_gt{num_saved+1}.png"), vis_gt.astype(np.uint8))
+                    
                     num_saved += 1
             
             
