@@ -94,20 +94,13 @@ def denormalize(tensor, mean, std):
 
 def main(args):    
     # 加载训练集
-    # train_dataset = FullDataset(args.train_image_path, args.train_mask_path, 352, mode='train')
-    # train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=8)
     train_dataset = build_combined_dataset(args.train_roots, size=352)
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=8)
 
-
-    
-    # 加载验证集（目录命名为 val）
-    # val_dataset = FullDataset(args.train_image_path.replace("train", "val"), 
-    #                           args.train_mask_path.replace("train", "val"),
-    #                           352, mode='val')
-    # val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=4)
     val_dataset = build_combined_dataset([root.replace("train", "val") for root in args.train_roots], size=352)
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=4)
+    
+    print(f"Training name: {args.name}")
 
     device = torch.device("cuda")
     model = SAM2UNet(args.hiera_path, n_experts=args.n_experts)
