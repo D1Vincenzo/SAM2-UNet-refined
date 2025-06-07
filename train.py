@@ -158,20 +158,30 @@ def main(args):
             loss1 = structure_loss(pred1, target)
             loss2 = structure_loss(pred2, target)
             loss = loss0 + loss1 + loss2
+            
+            aux_loss_total = 0.0
+            for m in model.modules():
+                if hasattr(m, 'aux_loss'):
+                    aux_loss_total += m.aux_loss
+            loss += aux_loss_total
+                    
             loss.backward()
             optim.step()
             total_loss += loss.item()
-
+            
             if i % 50 == 0:
                 print("epoch:{}-{}: loss:{}".format(epoch + 1, i + 1, loss.item()))
 
         avg_loss = total_loss / len(train_loader)
         writer.add_scalar('Loss/train', avg_loss, epoch)
+        writer.add_scalar('Loss/aux_loss', aux_loss_total.item(), epoch)
+
 
         # 验证阶段（不涉及梯度）
         model.eval()
 
         val_loss = 0.0
+        num_saved = 0
         with torch.no_grad():
             for batch in val_loader:
                 x = batch['image'].to(device)
