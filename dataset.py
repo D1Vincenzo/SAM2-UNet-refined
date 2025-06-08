@@ -120,17 +120,20 @@ class TestDataset:
             transforms.Normalize([0.485, 0.456, 0.406],
                                  [0.229, 0.224, 0.225])
         ])
-        self.gt_transform = transforms.ToTensor()
         self.size = len(self.images)
         self.index = 0
 
     def load_data(self):
-        image = self.rgb_loader(self.images[self.index])
+        image_path = self.images[self.index]
+        gt_path = self.gts[self.index]
+        image = self.rgb_loader(image_path)
         image = self.transform(image).unsqueeze(0)
 
-        gt = self.binary_loader(self.gts[self.index])
+        gt = self.binary_loader(gt_path)
         gt = np.array(gt)
-        name = os.path.basename(self.images[self.index])
+        gt = (gt > 127).astype(np.uint8) * 255  # 二值化为 0/255
+
+        name = os.path.basename(image_path)
         self.index += 1
         return image, gt, name
 
