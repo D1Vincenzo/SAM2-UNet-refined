@@ -22,8 +22,14 @@ args = parser.parse_args()
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 test_loader = TestDataset(args.test_image_path, args.test_gt_path, 352)
-model = SAM2UNet().to(device)
-model.load_state_dict(torch.load(args.checkpoint), strict=True)
+model = SAM2UNet(n_experts=4).to(device)
+# model.load_state_dict(torch.load(args.checkpoint), strict=True)
+checkpoint = torch.load(args.checkpoint, map_location=device)
+if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+    model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+else:
+    model.load_state_dict(checkpoint, strict=False)
+
 model.eval()
 model.cuda()
 os.makedirs(args.save_path, exist_ok=True)
@@ -42,8 +48,8 @@ for i in range(test_loader.size):
         res = (res * 255).astype(np.uint8)
         # If you want to binarize the prediction results, please uncomment the following three lines. 
         # Note that this action will affect the calculation of evaluation metrics.
-        # lambda = 0.5
-        # res[res >= int(255 * lambda)] = 255
-        # res[res < int(255 * lambda)] = 0
+        lambda_ = 0.5
+        res[res >= int(255 * lambda_)] = 255
+        res[res < int(255 * lambda_)] = 0
         print("Saving " + name)
         imageio.imsave(os.path.join(args.save_path, name[:-4] + ".png"), res)
