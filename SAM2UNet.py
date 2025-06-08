@@ -153,9 +153,11 @@ class SAM2UNet(nn.Module):
         # self.encoder.blocks = nn.Sequential(
         #     *blocks
         # )
+        # print(f"Structure: Default Adapter)
         
         ''' MOE LORA'''
         # replace_qkv_with_moe_qkv(self.encoder, r=4, n_experts=n_experts)
+        # print("MOE LoRA blocks initialized.")
         
         ''' MOE ADAPTER '''
         blocks = []
@@ -164,6 +166,7 @@ class SAM2UNet(nn.Module):
                 MoEAdapterBlock(blk, n_experts=n_experts, lambda_=0.01)
             )
         self.encoder.blocks = nn.Sequential(*blocks)
+        print(f"Structure: MoE Adapter with {n_experts} experts")
 
         self.rfb1 = RFB_modified(144, 64)
         self.rfb2 = RFB_modified(288, 64)
