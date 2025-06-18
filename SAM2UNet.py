@@ -163,11 +163,11 @@ class SAM2UNet(nn.Module):
         blocks = []
         for blk in self.encoder.blocks:
             blocks.append(
-                MoEAdapterBlock(blk, n_experts=n_experts, lambda_=0.01, top_k=2)
+                MoEAdapterBlock(blk, n_experts=n_experts, lambda_=0.01, top_k=top_k)
             )
         self.encoder.blocks = nn.Sequential(*blocks)
         print(f"Structure: MoE Adapter with {n_experts} experts")
-        # print(f"top_k: {top_k} implemented")
+        print(f"top_k: {top_k} implemented")
 
 
         self.rfb1 = RFB_modified(144, 64)
