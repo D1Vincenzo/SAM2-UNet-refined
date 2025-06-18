@@ -18,7 +18,7 @@ class AdapterExpert(nn.Module):
 
 
 class MoEAdapterBlock(nn.Module):
-    def __init__(self, shared_block: nn.Module, n_experts=4, lambda_=0.01):
+    def __init__(self, shared_block: nn.Module, n_experts=4, lambda_=0.01, top_k=2):
         super().__init__()
         self.block = shared_block
         self.lambda_ = lambda_
@@ -35,6 +35,8 @@ class MoEAdapterBlock(nn.Module):
             AdapterExpert(dim) for _ in range(n_experts)
         ])
 
+        self.top_k = top_k
+
     def forward(self, x):
         reshaped = False
         if x.dim() == 4:
@@ -47,7 +49,16 @@ class MoEAdapterBlock(nn.Module):
         B, L, D = x.shape
         pooled = x.mean(dim=1)
         gate_logits = self.gate(pooled)  # [B, n_experts]
-        weights = F.softmax(gate_logits, dim=-1)  # [B, n_experts]
+        # weights = F.softmax(gate_logits, dim=-1)  # [B, n_experts]
+
+
+        ### top-k routing
+        topk_vals, topk_ids = torch.topk(gate_logits, k=self.top_k, dim=-1)  # [B, top_k]
+        topk_weights = F.softmax(topk_vals, dim=-1)  # [B, top_k]
+        # 构建新的稀疏权重矩阵
+        weights = torch.zeros_like(gate_logits)  # [B, n_experts]
+        weights.scatter_(dim=1, index=topk_ids, src=topk_weights)  # 仅 top-k 非零
+        ###
 
         # expert outputs
         outputs = torch.stack([expert(x) for expert in self.experts], dim=1)  # [B, n_experts, L, D]

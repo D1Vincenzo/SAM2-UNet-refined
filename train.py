@@ -37,6 +37,7 @@ parser.add_argument('--name', type=str, default='moe',
 parser.add_argument('--train_roots', nargs='+', required=True,
                     help="List of dataset train roots, e.g., datasets/ClinicDB/train datasets/CVC-ColonDB/train")
 parser.add_argument('--n_experts', type=int, default=4)
+parser.add_argument('--top_k', type=int, default=2)
 
 args = parser.parse_args()
 
@@ -97,13 +98,13 @@ def main(args):
     train_dataset = build_combined_dataset(args.train_roots, size=352)
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=8)
 
-    val_dataset = build_combined_dataset([root.replace("train", "val") for root in args.train_roots], size=352)
+    val_dataset = build_combined_dataset([root.replace("train", "test") for root in args.train_roots], size=352)
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=4)
     
     print(f"Training name: {args.name}")
 
     device = torch.device("cuda")
-    model = SAM2UNet(args.hiera_path, n_experts=args.n_experts)
+    model = SAM2UNet(args.hiera_path, n_experts=args.n_experts, top_k=args.top_k)
     model.to(device)
     
     optim = opt.AdamW([{"params": model.parameters(), "initia_lr": args.lr}], lr=args.lr, weight_decay=args.weight_decay)
@@ -159,12 +160,12 @@ def main(args):
             loss = loss0 + loss1 + loss2
             
             ### 计算辅助损失
-            aux_loss_total = 0.0
-            for m in model.modules():
-                if hasattr(m, 'aux_loss'):
-                    aux_loss_total += m.aux_loss
-            loss += aux_loss_total
-            total_loss_aux += aux_loss_total.item()
+            # aux_loss_total = 0.0
+            # for m in model.modules():
+            #     if hasattr(m, 'aux_loss'):
+            #         aux_loss_total += m.aux_loss
+            # loss += aux_loss_total
+            # total_loss_aux += aux_loss_total.item()
             ###
             loss.backward()
             optim.step()
@@ -175,7 +176,7 @@ def main(args):
 
         avg_loss = total_loss / len(train_loader)
         writer.add_scalar('Loss/train', avg_loss, epoch)
-        writer.add_scalar('Loss/aux_loss', aux_loss_total.item(), epoch)
+        # writer.add_scalar('Loss/aux_loss', aux_loss_total.item(), epoch)
 
 
         # 验证阶段（不涉及梯度）
