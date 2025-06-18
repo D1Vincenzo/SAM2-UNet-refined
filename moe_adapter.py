@@ -49,10 +49,13 @@ class MoEAdapterBlock(nn.Module):
         B, L, D = x.shape
         pooled = x.mean(dim=1)
         gate_logits = self.gate(pooled)  # [B, n_experts]
+        
+        
         # weights = F.softmax(gate_logits, dim=-1)  # [B, n_experts]
-
-
+        # print("No top-k routing, using all experts")
+        
         ### top-k routing
+        print(f"[MoEAdapterBlock] Using top-{self.top_k} routing")
         topk_vals, topk_ids = torch.topk(gate_logits, k=self.top_k, dim=-1)  # [B, top_k]
         topk_weights = F.softmax(topk_vals, dim=-1)  # [B, top_k]
         # 构建新的稀疏权重矩阵
