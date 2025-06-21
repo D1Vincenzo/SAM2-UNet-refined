@@ -2,6 +2,33 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import loralib as lora
+import math
+
+# ====== 替代 loralib.Linear 的 SAMed 风格 LoRA 实现 ======
+class _LoRALinear(nn.Module):
+    def __init__(self, in_features, out_features, r=4, bias=True):
+        super().__init__()
+        self.weight = nn.Parameter(torch.empty(out_features, in_features))  # Frozen during training
+        self.bias = nn.Parameter(torch.zeros(out_features)) if bias else None
+
+        self.lora_a = nn.Linear(in_features, r, bias=False)
+        self.lora_b = nn.Linear(r, out_features, bias=False)
+
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        nn.init.kaiming_uniform_(self.weight, a=math.sqrt(5))
+        if self.bias is not None:
+            fan_in = self.weight.size(1)
+            bound = 1 / math.sqrt(fan_in)
+            nn.init.uniform_(self.bias, -bound, bound)
+        nn.init.kaiming_uniform_(self.lora_a.weight, a=math.sqrt(5))
+        nn.init.zeros_(self.lora_b.weight)
+
+    def forward(self, x):
+        base = F.linear(x, self.weight, self.bias)
+        delta = self.lora_b(self.lora_a(x))
+        return base + delta
 
 
 # ====== Dense MoE-LoRA Module ======
@@ -18,16 +45,14 @@ class MoELinear(nn.Module):
         )
 
         self.experts = nn.ModuleList([
-            lora.Linear(in_features, out_features, r=r)
+            _LoRALinear(in_features, out_features, r=r)
             for _ in range(n_experts)
         ])
 
     def forward(self, x):
-
         original_shape = x.shape
         reshaped = False
 
-        # ===== 修复：自动支持 [B, H, W, D] 输入 =====
         if x.dim() == 4:
             B, H, W, D = x.shape
             x = x.view(B, H * W, D)
@@ -37,30 +62,22 @@ class MoELinear(nn.Module):
         
         B, L, D = x.shape
 
-        # ===== 门控 =====
         pooled = x.mean(dim=1)
         gate_logits = self.gate(pooled)
         weights = F.softmax(gate_logits, dim=-1)  # [B, n_experts]
 
-        # ===== 多专家输出 =====
         expert_outputs = [expert(x) for expert in self.experts]  # 每个 [B, L, out_features]
         stacked = torch.stack(expert_outputs, dim=1)  # [B, n_experts, L, out_features]
         weights = weights.view(B, self.n_experts, 1, 1)
         output = (stacked * weights).sum(dim=1)  # [B, L, out_features]
 
-        # ===== 恢复形状（如果之前 reshape 过） =====
         if reshaped:
             output = output.view(B, H, W, -1)
 
-        # ===== 辅助损失 =====
         if self.training:
             prob_mean = weights.mean(dim=0).squeeze()
             entropy = - (prob_mean * torch.log(prob_mean + 1e-8)).sum()
             self.aux_loss = self.lambda_ * entropy
-            
-            
-        # if self.training:
-        #     print(f"[Gate Weights] {weights[0].detach().cpu().numpy()}")
 
         return output
 
