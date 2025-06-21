@@ -70,6 +70,14 @@ for i, mask_name in enumerate(mask_name_list):
     mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
     pred = cv2.imread(pred_path, cv2.IMREAD_GRAYSCALE)
 
+    
+    if pred is None:
+        print(f"[WARN] Cannot read prediction image: {pred_path}")
+        continue
+    if mask is None:
+        print(f"[WARN] Cannot read GT mask image: {mask_path}")
+        continue
+
     FM.step(pred=pred, gt=mask)
     WFM.step(pred=pred, gt=mask)
     SM.step(pred=pred, gt=mask)

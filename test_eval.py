@@ -1,16 +1,13 @@
-import os
 import argparse
 import torch
-import imageio
 import numpy as np
 import torch.nn.functional as F
-import cv2
 import py_sod_metrics
 from SAM2UNet import SAM2UNet
 from dataset import TestDataset
 
 
-def evaluate_predictions(pred_root, mask_root, dataset_name):
+def evaluate_predictions_from_memory(pred_list, mask_list, dataset_name):
     FM = py_sod_metrics.Fmeasure()
     WFM = py_sod_metrics.WeightedFmeasure()
     SM = py_sod_metrics.Smeasure()
@@ -25,22 +22,8 @@ def evaluate_predictions(pred_root, mask_root, dataset_name):
         }
     )
 
-    mask_name_list = sorted(os.listdir(mask_root))
-    for i, mask_name in enumerate(mask_name_list):
-        print(f"[{i}] Processing {mask_name}...")
-        mask_path = os.path.join(mask_root, mask_name)
-        pred_path = os.path.join(pred_root, mask_name[:-4] + '.png')
-
-        mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
-        pred = cv2.imread(pred_path, cv2.IMREAD_GRAYSCALE)
-
-        if pred is None:
-            print(f"[WARN] Cannot read prediction image: {pred_path}")
-            continue
-        if mask is None:
-            print(f"[WARN] Cannot read GT mask image: {mask_path}")
-            continue
-
+    for i, (pred, mask) in enumerate(zip(pred_list, mask_list)):
+        print(f"[{i}] Evaluating sample...")
         FM.step(pred=pred, gt=mask)
         WFM.step(pred=pred, gt=mask)
         SM.step(pred=pred, gt=mask)
@@ -75,6 +58,7 @@ def evaluate_predictions(pred_root, mask_root, dataset_name):
     print("MAE:         ", format(curr_results['MAE'], '.3f'))
 
 
+
 def main(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     test_loader = TestDataset(args.test_image_path, args.test_gt_path, 352)
@@ -89,12 +73,14 @@ def main(args):
 
     model.eval()
     model.cuda()
-    os.makedirs(args.save_path, exist_ok=True)
+
+    pred_list = []
+    mask_list = []
 
     for i in range(test_loader.size):
         with torch.no_grad():
             image, gt, name = test_loader.load_data()
-            gt = np.asarray(gt, np.float32)
+            gt = np.asarray(gt, np.uint8)
             image = image.to(device)
 
             res, _, _ = model(image)
@@ -108,12 +94,12 @@ def main(args):
             res[res >= int(255 * lambda_)] = 255
             res[res < int(255 * lambda_)] = 0
 
-            save_path = os.path.join(args.save_path, name[:-4] + ".png")
-            imageio.imsave(save_path, res)
-            print(f"Saved prediction: {save_path}")
+            pred_list.append(res)
+            mask_list.append(gt)
 
-    # After all predictions
-    evaluate_predictions(args.save_path, args.test_gt_path, args.dataset_name)
+    # 内存中评估
+    evaluate_predictions_from_memory(pred_list, mask_list, args.dataset_name)
+
 
 
 if __name__ == "__main__":
@@ -124,8 +110,6 @@ if __name__ == "__main__":
                         help="path to the image files for testing")
     parser.add_argument("--test_gt_path", type=str, required=True,
                         help="path to the mask files for testing")
-    parser.add_argument("--save_path", type=str, required=True,
-                        help="path to save the predicted masks")
     parser.add_argument("--dataset_name", type=str, required=True,
                         help="name of the test dataset (used in print only)")
     parser.add_argument('--n_experts', type=int, default=4)
