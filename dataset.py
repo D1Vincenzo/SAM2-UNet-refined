@@ -65,11 +65,11 @@ class Normalize(object):
     
 
 class FullDataset(Dataset):
-    def __init__(self, image_root, gt_root, size, mode):
-        self.images = [image_root + f for f in os.listdir(image_root) if f.endswith('.jpg') or f.endswith('.png')]
-        self.gts = [gt_root + f for f in os.listdir(gt_root) if f.endswith('.png')]
-        self.images = sorted(self.images)
-        self.gts = sorted(self.gts)
+    def __init__(self, image_root, gt_root, size, mode='train'):
+        self.images = sorted([os.path.join(image_root, f) for f in os.listdir(image_root) if f.endswith(('.jpg', '.png'))])
+        self.gts = sorted([os.path.join(gt_root, f) for f in os.listdir(gt_root) if f.endswith(('.jpg', '.png'))])
+        assert len(self.images) == len(self.gts), f"Number of images ({len(self.images)}) and labels ({len(self.gts)}) do not match!"
+
         if mode == 'train':
             self.transform = transforms.Compose([
                 Resize((size, size)),
@@ -78,7 +78,7 @@ class FullDataset(Dataset):
                 ToTensor(),
                 Normalize()
             ])
-        else:
+        else:  # 'val' or other modes
             self.transform = transforms.Compose([
                 Resize((size, size)),
                 ToTensor(),
@@ -108,29 +108,30 @@ class FullDataset(Dataset):
 
 class TestDataset:
     def __init__(self, image_root, gt_root, size):
-        self.images = [image_root + f for f in os.listdir(image_root) if f.endswith('.jpg') or f.endswith('.png')]
-        self.gts = [gt_root + f for f in os.listdir(gt_root) if f.endswith('.png')]
-        self.images = sorted(self.images)
-        self.gts = sorted(self.gts)
+        self.images = sorted([os.path.join(image_root, f) for f in os.listdir(image_root) if f.endswith(('.jpg', '.png'))])
+        self.gts = sorted([os.path.join(gt_root, f) for f in os.listdir(gt_root) if f.endswith(('.jpg', '.png'))])
+        assert len(self.images) == len(self.gts)
+
         self.transform = transforms.Compose([
             transforms.Resize((size, size)),
             transforms.ToTensor(),
             transforms.Normalize([0.485, 0.456, 0.406],
                                  [0.229, 0.224, 0.225])
         ])
-        self.gt_transform = transforms.ToTensor()
         self.size = len(self.images)
         self.index = 0
 
     def load_data(self):
-        image = self.rgb_loader(self.images[self.index])
+        image_path = self.images[self.index]
+        gt_path = self.gts[self.index]
+        image = self.rgb_loader(image_path)
         image = self.transform(image).unsqueeze(0)
 
-        gt = self.binary_loader(self.gts[self.index])
+        gt = self.binary_loader(gt_path)
         gt = np.array(gt)
+        gt = (gt > 127).astype(np.uint8) * 255  # 二值化为 0/255
 
-        name = self.images[self.index].split('/')[-1]
-
+        name = os.path.basename(image_path)
         self.index += 1
         return image, gt, name
 
