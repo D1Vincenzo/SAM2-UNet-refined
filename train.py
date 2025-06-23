@@ -14,7 +14,7 @@ from SAM2UNet import SAM2UNet
 from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import ConcatDataset
 from py_sod_metrics import FmeasureV2, DICEHandler
-
+from peft import get_peft_model_state_dict
 
 parser = argparse.ArgumentParser("SAM2-UNet")
 parser.add_argument("--hiera_path", type=str, required=True, 
@@ -32,7 +32,10 @@ parser.add_argument('--name', type=str, default='moe',
                     help="name of the model, used for logging and saving")
 parser.add_argument('--train_roots', nargs='+', required=True,
                     help="List of dataset train roots, e.g., datasets/ClinicDB/train datasets/CVC-ColonDB/train")
-
+parser.add_argument("--lora_rank", type=int, default=8,
+                    help="LoRA rank (default: 8)")
+parser.add_argument("--lora_alpha", type=int, default=32,
+                    help="LoRA alpha (default: 32)")
 args = parser.parse_args()
 
 
@@ -88,21 +91,37 @@ def denormalize(tensor, mean, std):
 
 
 def main(args):    
-    # 加载训练集
     train_dataset = build_combined_dataset(args.train_roots, size=352)
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=8)
 
-    val_dataset = build_combined_dataset([root.replace("train", "test") for root in args.train_roots], size=352)
+    val_dataset = build_combined_dataset([root.replace("train", "test") for root in args.train_roots], size=352) # No validation dataset for now, using test datasets as validation
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=4)
     
-    print(f"Training name: {args.name}")
-
     device = torch.device("cuda")
-    model = SAM2UNet(args.hiera_path)
+    model = SAM2UNet(args.hiera_path, lora_rank=args.lora_rank, lora_alpha=args.lora_alpha)
     model.to(device)
     
-    optim = opt.AdamW([{"params": model.parameters(), "initia_lr": args.lr}], lr=args.lr, weight_decay=args.weight_decay)
-    scheduler = CosineAnnealingLR(optim, args.epoch, eta_min=1.0e-7)
+    print(f"Training name: {args.name}")
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"总参数: {total_params/1e6:.2f}M, 可训练参数: {trainable_params/1e6:.2f}M")
+    
+    optimizer = opt.AdamW([
+        {"params": model.encoder.parameters(), "lr": args.lr},  # 只包含LoRA参数
+        {"params": model.rfb1.parameters(), "lr": args.lr},
+        {"params": model.rfb2.parameters(), "lr": args.lr},
+        {"params": model.rfb3.parameters(), "lr": args.lr},
+        {"params": model.rfb4.parameters(), "lr": args.lr},
+        {"params": model.up1.parameters(), "lr": args.lr},
+        {"params": model.up2.parameters(), "lr": args.lr},
+        {"params": model.up3.parameters(), "lr": args.lr},
+        {"params": model.up4.parameters(), "lr": args.lr},
+        {"params": model.side1.parameters(), "lr": args.lr},
+        {"params": model.side2.parameters(), "lr": args.lr},
+        {"params": model.head.parameters(), "lr": args.lr},
+    ], lr=args.lr, weight_decay=args.weight_decay)
+
+    scheduler = CosineAnnealingLR(optimizer, args.epoch, eta_min=1.0e-7)
 
     start_epoch = 0
     best_val_loss = float('inf')
@@ -110,23 +129,38 @@ def main(args):
     vis_save_path = os.path.join(args.save_path, "val_visuals")
     os.makedirs(vis_save_path, exist_ok=True)
 
-
+    # Load checkpoint
     if args.resume is not None and os.path.isfile(args.resume):
         print(f"=> Loading checkpoint from {args.resume}")
         checkpoint = torch.load(args.resume, map_location=device)
         
-        if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
-            model.load_state_dict(checkpoint['model_state_dict'])
-            optim_state_dict = checkpoint.get('optimizer_state_dict', None)
-            sched_state_dict = checkpoint.get('scheduler_state_dict', None)
-            if optim_state_dict:
-                optim.load_state_dict(optim_state_dict)
-            if sched_state_dict:
-                scheduler.load_state_dict(sched_state_dict)
+        # 新检查点格式识别
+        if 'lora_state_dict' in checkpoint and 'decoder_state_dict' in checkpoint:
+            # LoRA专用格式
+            model.encoder.load_state_dict(checkpoint['lora_state_dict'], strict=False)
+            
+            decoder_state = checkpoint['decoder_state_dict']
+            model.rfb1.load_state_dict(decoder_state['rfb1'])
+            model.rfb2.load_state_dict(decoder_state['rfb2'])
+            model.rfb3.load_state_dict(decoder_state['rfb3'])
+            model.rfb4.load_state_dict(decoder_state['rfb4'])
+            model.up1.load_state_dict(decoder_state['up1'])
+            model.up2.load_state_dict(decoder_state['up2'])
+            model.up3.load_state_dict(decoder_state['up3'])
+            model.up4.load_state_dict(decoder_state['up4'])
+            model.side1.load_state_dict(decoder_state['side1'])
+            model.side2.load_state_dict(decoder_state['side2'])
+            model.head.load_state_dict(decoder_state['head'])
+            
+            if 'optimizer_state_dict' in checkpoint:
+                optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            if 'scheduler_state_dict' in checkpoint:
+                scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+                
             start_epoch = checkpoint.get('epoch', 0)
             best_val_loss = checkpoint.get('best_val_loss', float('inf'))
             best_val_dice = checkpoint.get('best_val_dice', 0.0)
-            print(f"=> Resuming training from epoch {start_epoch}")
+            print(f"=> Resuming training from epoch {start_epoch}")            
     else:
         print("=> No checkpoint loaded. Training from scratch.")
 
@@ -140,7 +174,7 @@ def main(args):
             x = batch['image'].to(device)
             target = batch['label'].to(device)
 
-            optim.zero_grad()
+            optimizer.zero_grad()
             pred0, pred1, pred2 = model(x)
             loss0 = structure_loss(pred0, target)
             loss1 = structure_loss(pred1, target)
@@ -148,7 +182,7 @@ def main(args):
             loss = loss0 + loss1 + loss2
             
             loss.backward()
-            optim.step()
+            optimizer.step()
             total_loss += loss.item()
             
             if i % 50 == 0:
@@ -158,7 +192,6 @@ def main(args):
         writer.add_scalar('Loss/train', avg_loss, epoch)
 
         model.eval()
-
         val_loss = 0.0
         num_saved = 0
         with torch.no_grad():
@@ -169,7 +202,7 @@ def main(args):
                 loss = structure_loss(pred0, target) + structure_loss(pred1, target) + structure_loss(pred2, target)
                 val_loss += loss.item()
                 
-                ###
+                ### Visulize predictions
                 if num_saved < 10:
                     pred = torch.sigmoid(pred0)
                     pred_bin = (pred > 0.5).float()
@@ -186,6 +219,8 @@ def main(args):
             
         avg_val_loss = val_loss / len(val_loader)
         writer.add_scalar('Loss/val', avg_val_loss, epoch)
+        scheduler.step()
+        
         # DICE 评估
         dice_score = evaluate_dice_with_metric(model, val_loader, device)
         writer.add_scalar('Metric/DICE', dice_score, epoch)
@@ -193,8 +228,21 @@ def main(args):
 
         checkpoint_dict = {
             'epoch': epoch + 1,
-            'model_state_dict': model.state_dict(),
-            'optimizer_state_dict': optim.state_dict(),
+            'lora_state_dict': get_peft_model_state_dict(model.encoder),  # LoRA权重
+            'decoder_state_dict': {  # 解码器权重
+                'rfb1': model.rfb1.state_dict(),
+                'rfb2': model.rfb2.state_dict(),
+                'rfb3': model.rfb3.state_dict(),
+                'rfb4': model.rfb4.state_dict(),
+                'up1': model.up1.state_dict(),
+                'up2': model.up2.state_dict(),
+                'up3': model.up3.state_dict(),
+                'up4': model.up4.state_dict(),
+                'side1': model.side1.state_dict(),
+                'side2': model.side2.state_dict(),
+                'head': model.head.state_dict(),
+            },
+            'optimizer_state_dict': optimizer.state_dict(),
             'scheduler_state_dict': scheduler.state_dict(),
             'best_val_loss': best_val_loss,
             'best_val_dice': best_val_dice,
@@ -207,13 +255,12 @@ def main(args):
             best_val_dice = dice_score
             best_model_path = os.path.join(args.save_path, f'{args.name}-best-model.pth')
             torch.save(checkpoint_dict, best_model_path)
-            print(f"=> Best model (DICE ↑) saved to {best_model_path}")
+            print(f"=> !!! Best model (DICE ↑) saved to {best_model_path}")
             
         latest_model_path = os.path.join(args.save_path, f'{args.name}-latest-model.pth')
         torch.save(checkpoint_dict, latest_model_path)
         print(f"[Saving latest model:] {latest_model_path}")
 
-        scheduler.step()
 
     writer.close()
 

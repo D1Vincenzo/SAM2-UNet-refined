@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from sam2.build_sam import build_sam2
-
+from peft import LoraConfig, inject_adapter_in_model
 
 class DoubleConv(nn.Module):
     """(convolution => [BN] => ReLU) * 2"""
@@ -122,7 +122,7 @@ class RFB_modified(nn.Module):
 
 
 class SAM2UNet(nn.Module):
-    def __init__(self, checkpoint_path=None) -> None:
+    def __init__(self, checkpoint_path=None, lora_rank=8, lora_alpha=32) -> None:
         super(SAM2UNet, self).__init__()    
         model_cfg = "sam2_hiera_l.yaml"
         if checkpoint_path:
@@ -141,14 +141,27 @@ class SAM2UNet(nn.Module):
 
         for param in self.encoder.parameters():
             param.requires_grad = False
-        blocks = []
-        for block in self.encoder.blocks:
-            blocks.append(
-                Adapter(block)
-            )
-        self.encoder.blocks = nn.Sequential(
-            *blocks
+            
+            
+        # blocks = []
+        # for block in self.encoder.blocks:
+        #     blocks.append(
+        #         Adapter(block)
+        #     )
+        # self.encoder.blocks = nn.Sequential(
+        #     *blocks
+        # )
+        
+        # ===== 配置并注入 LoRA =====
+        lora_config = LoraConfig(
+            r=lora_rank,
+            lora_alpha=lora_alpha,
+            target_modules=["qkv", "proj", "fc1", "fc2"],
+            lora_dropout=0.1,
+            bias="lora_only",
         )
+        self.encoder = inject_adapter_in_model(lora_config, self.encoder)
+        
         self.rfb1 = RFB_modified(144, 64)
         self.rfb2 = RFB_modified(288, 64)
         self.rfb3 = RFB_modified(576, 64)
