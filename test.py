@@ -61,6 +61,7 @@ def main(args):
     # 读取 LoRA 参数（优先使用 ckpt 中的值）
     lora_rank = checkpoint.get('lora_rank', args.lora_rank)
     lora_alpha = checkpoint.get('lora_alpha', args.lora_alpha)
+    name = checkpoint.get('name', 'SAM2UNet')
 
     # 构建模型
     model = SAM2UNet(args.hiera_path, lora_rank=lora_rank, lora_alpha=lora_alpha)
@@ -98,7 +99,7 @@ def main(args):
 
         # DICE 评估
         dice_score = evaluate_dice_with_metric(model, val_loader, device)
-        print(f"model: {args.name} | DICE Score: {dice_score:.4f}")
+        print(f"model: {name} | DICE Score: {dice_score:.4f}")
 
  
 if __name__ == "__main__":
