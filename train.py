@@ -76,12 +76,12 @@ def evaluate_dice_with_metric(model, dataloader, device):
     return results["dice"]["dynamic"].mean()
 
 
-def build_combined_dataset(train_roots, size=352):
+def build_combined_dataset(train_roots, size=352, mode='train'):
     datasets = []
     for train_root in train_roots:
         image_path = os.path.join(train_root, "images")
         mask_path = os.path.join(train_root, "masks")
-        datasets.append(FullDataset(image_path, mask_path, size, mode='train'))
+        datasets.append(FullDataset(image_path, mask_path, size, mode=mode))
     return ConcatDataset(datasets)
 
 def denormalize(tensor, mean, std):
@@ -94,7 +94,7 @@ def main(args):
     train_dataset = build_combined_dataset(args.train_roots, size=352)
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=8)
 
-    val_dataset = build_combined_dataset([root.replace("train", "test") for root in args.train_roots], size=352) # No validation dataset for now, using test datasets as validation
+    val_dataset = build_combined_dataset([root.replace("train", "test") for root in args.train_roots], size=352, mode='val') # No validation dataset for now, using test datasets as validation
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=4)
     
     device = torch.device("cuda")
