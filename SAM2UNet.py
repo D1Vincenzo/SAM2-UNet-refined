@@ -153,6 +153,7 @@ class SAM2UNet(nn.Module):
         # )
         
         # ===== 配置并注入 LoRA =====
+        print(f"Injecting LoRA with rank {lora_rank} and alpha {lora_alpha}")
         lora_config = LoraConfig(
             r=lora_rank,
             lora_alpha=lora_alpha,
