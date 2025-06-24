@@ -228,7 +228,7 @@ def main(args):
 
         checkpoint_dict = {
             'epoch': epoch + 1,
-            'lora_state_dict': get_peft_model_state_dict(model.encoder),  # LoRA权重
+            'lora_state_dict': {name: param for name, param in model.encoder.named_parameters() if param.requires_grad},  # LoRA权重
             'decoder_state_dict': {  # 解码器权重
                 'rfb1': model.rfb1.state_dict(),
                 'rfb2': model.rfb2.state_dict(),
