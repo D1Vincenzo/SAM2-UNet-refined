@@ -15,6 +15,7 @@ from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import ConcatDataset
 from py_sod_metrics import FmeasureV2, DICEHandler
 from peft import MoELinear
+from torch.cuda.amp import autocast, GradScaler
 
 parser = argparse.ArgumentParser("SAM2-UNet")
 parser.add_argument("--hiera_path", type=str, required=True, 
@@ -156,41 +157,50 @@ def main(args):
     os.makedirs(args.save_path, exist_ok=True)
     writer = SummaryWriter(log_dir=os.path.join(args.save_path, 'runs'))
 
+    scaler = GradScaler()  # ✅ 添加
+    accumulation_steps = 2  # ✅ 添加：根据需要设置累积步数
+
     for epoch in range(start_epoch, args.epoch):
         model.train()
         total_loss = 0.0
+        optimizer.zero_grad()  # ✅ 添加：把 zero_grad 移到循环外（配合累积）
+
         for i, batch in enumerate(train_loader):
             x = batch['image'].to(device)
             target = batch['label'].to(device)
 
-            optimizer.zero_grad()
-            pred0, pred1, pred2 = model(x)
-            loss0 = structure_loss(pred0, target)
-            loss1 = structure_loss(pred1, target)
-            loss2 = structure_loss(pred2, target)
-            # loss = loss0 + loss1 + loss2
-            main_loss = loss0 + loss1 + loss2
-            
-            # 收集所有 MoE 损失
-            moe_loss = 0.0
-            for module in model.modules():
-                if isinstance(module, MoELinear) and module.current_moe_loss is not None:
-                    moe_loss += module.current_moe_loss
-                    module.current_moe_loss = None  # 重置损失
-            
-            # loss.backward()
-            # optimizer.step()
-            # total_loss += loss.item()
-            # 总损失 = 主任务损失 + MoE损失（加权）
-            total_batch_loss = main_loss + moe_loss * args.moe_loss_weight
-            
-            total_batch_loss.backward()
-            optimizer.step()
+            # ✅ 添加：AMP 混合精度上下文
+            with autocast():
+                pred0, pred1, pred2 = model(x)
+                loss0 = structure_loss(pred0, target)
+                loss1 = structure_loss(pred1, target)
+                loss2 = structure_loss(pred2, target)
+                main_loss = loss0 + loss1 + loss2
+
+                moe_loss = 0.0
+                for module in model.modules():
+                    if isinstance(module, MoELinear) and module.current_moe_loss is not None:
+                        moe_loss += module.current_moe_loss
+                        module.current_moe_loss = None
+
+                total_batch_loss = main_loss + moe_loss * args.moe_loss_weight
+
+            # ✅ 修改：除以累积步数再反向传播
+            scaled_loss = total_batch_loss / accumulation_steps
+            scaler.scale(scaled_loss).backward()
+
+            # ✅ 添加：每隔 accumulation_steps 才执行一次 optimizer.step()
+            if (i + 1) % accumulation_steps == 0 or (i + 1 == len(train_loader)):
+                scaler.step(optimizer)
+                scaler.update()
+                optimizer.zero_grad()
+
             total_loss += total_batch_loss.item()
-            
+
             if i % 50 == 0:
-                # print("epoch:{}-{}: loss:{}".format(epoch + 1, i + 1, loss.item()))
                 print("epoch:{}-{}: loss:{}".format(epoch + 1, i + 1, total_batch_loss.item()))
+
+
 
         avg_loss = total_loss / len(train_loader)
         writer.add_scalar('Loss/train', avg_loss, epoch)
