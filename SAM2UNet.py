@@ -120,9 +120,41 @@ class RFB_modified(nn.Module):
         x = self.relu(x_cat + self.conv_res(x))
         return x
 
+class SimpleLoRALinear(nn.Module):
+    def __init__(self, original_linear, r=8, alpha=32):
+        super().__init__()
+        self.original = original_linear
+        self.r = r
+        self.alpha = alpha
+        self.scaling = alpha / r
+
+        in_features = original_linear.in_features
+        out_features = original_linear.out_features
+
+        # 冻结原始权重
+        for param in self.original.parameters():
+            param.requires_grad = False
+
+        # 添加可训练 LoRA 参数
+        self.lora_A = nn.Parameter(torch.randn(r, in_features) * 0.01)
+        self.lora_B = nn.Parameter(torch.randn(out_features, r) * 0.01)
+
+    def forward(self, x):
+        return self.original(x) + (x @ self.lora_A.T @ self.lora_B.T) * self.scaling
+    
+def inject_simple_lora(model, target_keywords=("qkv", "proj", "fc1", "fc2"), r=8, alpha=32):
+    for name, module in model.named_modules():
+        # DEBUG
+        if isinstance(module, SimpleLoRALinear):
+            print(f"[LoRA] Module {name} is replaced by SimpleLoRALinear.")
+        #
+        for child_name, child in module.named_children():
+            if any(k in child_name for k in target_keywords) and isinstance(child, nn.Linear):
+                setattr(module, child_name, SimpleLoRALinear(child, r=r, alpha=alpha))
+    return model
 
 class SAM2UNet(nn.Module):
-    def __init__(self, checkpoint_path=None, lora_rank=8, lora_alpha=32) -> None:
+    def __init__(self, checkpoint_path=None, lora_rank=8, lora_alpha=32, conv_lora_expert_num=4, conv_lora_topk=1) -> None:
         super(SAM2UNet, self).__init__()    
         model_cfg = "sam2_hiera_l.yaml"
         if checkpoint_path:
@@ -153,16 +185,23 @@ class SAM2UNet(nn.Module):
         # )
         
         # ===== 配置并注入 LoRA =====
-        print(f"Injecting LoRA with rank {lora_rank} and alpha {lora_alpha}")
+        print(f"[LoRA] Injecting LoRA with rank {lora_rank} and alpha {lora_alpha}")
         lora_config = LoraConfig(
             r=lora_rank,
             lora_alpha=lora_alpha,
             target_modules=["qkv", "proj", "fc1", "fc2"],
             lora_dropout=0.1,
             bias="lora_only",
+            use_moe=True,
+            conv_lora_expert_num=conv_lora_expert_num,  # Number of experts in MoE-ConvLoRA
+            conv_lora_topk=conv_lora_topk,  # Number of experts to activate per token
         )
         self.encoder = inject_adapter_in_model(lora_config, self.encoder)
-        
+
+        # print(f"Injecting Custom LoRA with rank {lora_rank} and alpha {lora_alpha}")
+        # self.encoder = inject_simple_lora(self.encoder, r=lora_rank, alpha=lora_alpha)
+
+
         self.rfb1 = RFB_modified(144, 64)
         self.rfb2 = RFB_modified(288, 64)
         self.rfb3 = RFB_modified(576, 64)

@@ -14,6 +14,7 @@ from SAM2UNet import SAM2UNet
 from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import ConcatDataset
 from py_sod_metrics import FmeasureV2, DICEHandler
+from peft import MoELinear
 
 parser = argparse.ArgumentParser("SAM2-UNet")
 parser.add_argument("--hiera_path", type=str, required=True, 
@@ -35,6 +36,13 @@ parser.add_argument("--lora_rank", type=int, default=8,
                     help="LoRA rank (default: 8)")
 parser.add_argument("--lora_alpha", type=int, default=32,
                     help="LoRA alpha (default: 32)")
+parser.add_argument('--moe_loss_weight', type=float, default=0.01, 
+                    help='Weight for MoE auxiliary loss')
+parser.add_argument('--conv_lora_expert_num', type=int, default=4, 
+                    help='')
+parser.add_argument('--conv_lora_topk', type=int, default=1, 
+                    help='')
+
 args = parser.parse_args()
 
 
@@ -91,12 +99,12 @@ def main(args):
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=8)
     print(f"训练集样本数: {len(train_dataset)}")
 
-    val_dataset = build_combined_dataset([root.replace("train", "test") for root in args.train_roots], size=352) # No validation dataset for now, using test datasets as validation
+    val_dataset = build_combined_dataset([root.replace("train", "test") for root in args.train_roots], size=352, mode='val') # No validation dataset for now, using test datasets as validation
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=4)
     print(f"验证集样本数: {len(val_dataset)}")
 
     device = torch.device("cuda")
-    model = SAM2UNet(args.hiera_path, lora_rank=args.lora_rank, lora_alpha=args.lora_alpha)
+    model = SAM2UNet(args.hiera_path, lora_rank=args.lora_rank, lora_alpha=args.lora_alpha, conv_lora_expert_num=args.conv_lora_expert_num, conv_lora_topk=args.conv_lora_topk)
     model.to(device)
     
     print(f"Training name: {args.name}")
@@ -132,6 +140,15 @@ def main(args):
         print(f"=> Loading checkpoint from {args.resume}")
         checkpoint = torch.load(args.resume, map_location=device)
         model.load_state_dict(checkpoint['model_state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+        
+        # 恢复 MoE 配置
+        args.moe_loss_weight = checkpoint.get('moe_loss_weight', 0.01)  # 🔥
+        if 'conv_lora_expert_num' in checkpoint:
+            args.conv_lora_expert_num = checkpoint['conv_lora_expert_num']
+        if 'conv_lora_topk' in checkpoint:
+            args.conv_lora_topk = checkpoint['conv_lora_topk']
     
     else:
         print("=> No checkpoint loaded. Training from scratch.")
@@ -151,14 +168,29 @@ def main(args):
             loss0 = structure_loss(pred0, target)
             loss1 = structure_loss(pred1, target)
             loss2 = structure_loss(pred2, target)
-            loss = loss0 + loss1 + loss2
+            # loss = loss0 + loss1 + loss2
+            main_loss = loss0 + loss1 + loss2
             
-            loss.backward()
+            # 收集所有 MoE 损失
+            moe_loss = 0.0
+            for module in model.modules():
+                if isinstance(module, MoELinear) and module.current_moe_loss is not None:
+                    moe_loss += module.current_moe_loss
+                    module.current_moe_loss = None  # 重置损失
+            
+            # loss.backward()
+            # optimizer.step()
+            # total_loss += loss.item()
+            # 总损失 = 主任务损失 + MoE损失（加权）
+            total_batch_loss = main_loss + moe_loss * args.moe_loss_weight
+            
+            total_batch_loss.backward()
             optimizer.step()
-            total_loss += loss.item()
+            total_loss += total_batch_loss.item()
             
             if i % 50 == 0:
-                print("epoch:{}-{}: loss:{}".format(epoch + 1, i + 1, loss.item()))
+                # print("epoch:{}-{}: loss:{}".format(epoch + 1, i + 1, loss.item()))
+                print("epoch:{}-{}: loss:{}".format(epoch + 1, i + 1, total_batch_loss.item()))
 
         avg_loss = total_loss / len(train_loader)
         writer.add_scalar('Loss/train', avg_loss, epoch)
@@ -166,6 +198,12 @@ def main(args):
         model.eval()
         val_loss = 0.0
         num_saved = 0
+        
+        # 重置所有 MoE 损失
+        for module in model.modules():
+            if isinstance(module, MoELinear):
+                module.current_moe_loss = None
+        
         with torch.no_grad():
             counter = 0
             for batch in val_loader:
@@ -214,7 +252,9 @@ def main(args):
             'best_val_dice': best_val_dice,
             'lora_rank': args.lora_rank,
             'lora_alpha': args.lora_alpha,
-            'name': args.name
+            'name': args.name,
+            # 添加 MoE 相关配置
+            'moe_loss_weight': args.moe_loss_weight,  # 🔥 新增
         }
 
         current_lr = scheduler.get_last_lr()[0]
